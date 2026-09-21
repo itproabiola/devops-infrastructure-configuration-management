@@ -1,0 +1,138 @@
+---
+- name: Copy demo directory and set read-only permissions for all users
+  hosts: all
+  become: yes
+  vars:
+    # Source and destination paths
+    source_dir: "demo"
+    dest_path: "/opt/demo"
+    
+    # Permission settings
+    read_only_mode: '0444'  # Read-only for all users
+    dir_read_only_mode: '0555'  # Read and execute for directories
+    
+    # Backup existing directory
+    backup_existing: yes
+
+  tasks:
+    - name: Check if source demo directory exists locally
+      stat:
+        path: "{{ source_dir }}"
+      register: source_dir_check
+      delegate_to: localhost
+      run_once: yes
+
+    - name: Fail if source directory doesn't exist
+      fail:
+        msg: "Source directory '{{ source_dir }}' does not exist on the Ansible control node"
+      when: not source_dir_check.stat.exists
+
+    - name: Display source directory information
+      debug:
+        msg: "Source directory '{{ source_dir }}' found with {{ source_dir_check.stat.size }} bytes total size"
+      when: source_dir_check.stat.exists
+
+    - name: Check if destination directory exists on remote
+      stat:
+        path: "{{ dest_path }}"
+      register: dest_dir_check
+
+    - name: Backup existing directory if it exists
+      copy:
+        src: "{{ dest_path }}"
+        dest: "{{ dest_path }}.backup-{{ ansible_date_time.epoch }}"
+        remote_src: yes
+        mode: preserve
+      when: 
+        - dest_dir_check.stat.exists
+        - backup_existing | bool
+
+    - name: Remove existing destination directory
+      file:
+        path: "{{ dest_path }}"
+        state: absent
+      when: dest_dir_check.stat.exists
+
+    - name: Create parent directory if it doesn't exist
+      file:
+        path: "{{ dest_path | dirname }}"
+        state: directory
+        mode: '0755'
+      when: dest_path | dirname != "/"
+
+    - name: Copy demo directory to all servers
+      copy:
+        src: "{{ source_dir }}"
+        dest: "{{ dest_path }}"
+        mode: preserve  # We'll set permissions explicitly later
+        owner: root
+        group: root
+        backup: yes
+
+    - name: Set read-only permissions for all files recursively
+      find:
+        paths: "{{ dest_path }}"
+        file_type: file
+        recurse: yes
+      register: files_found
+
+    - name: Apply read-only permissions to all files
+      file:
+        path: "{{ item.path }}"
+        mode: "{{ read_only_mode }}"
+        owner: root
+        group: root
+      loop: "{{ files_found.files }}"
+
+    - name: Set read-only permissions for all directories recursively
+      find:
+        paths: "{{ dest_path }}"
+        file_type: directory
+        recurse: yes
+      register: dirs_found
+
+    - name: Apply read-only permissions to all directories
+      file:
+        path: "{{ item.path }}"
+        mode: "{{ dir_read_only_mode }}"
+        owner: root
+        group: root
+      loop: "{{ dirs_found.files }}"
+
+    - name: Set permissions for the main demo directory
+      file:
+        path: "{{ dest_path }}"
+        mode: "{{ dir_read_only_mode }}"
+        owner: root
+        group: root
+
+    - name: Verify directory structure and permissions
+      command: ls -la "{{ dest_path }}"
+      register: dir_listing
+      changed_when: false
+
+    - name: Display directory structure
+      debug:
+        msg: "Directory structure at {{ dest_path }}:\n{{ dir_listing.stdout }}"
+
+    - name: Verify read-only permissions by attempting to create a test file
+      command: touch "{{ dest_path }}/test_write.txt"
+      register: write_test
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Confirm write protection is working
+      debug:
+        msg: "✅ Write protection confirmed: Cannot create files in read-only directory"
+      when: write_test.failed
+
+    - name: Display deployment summary
+      debug:
+        msg: |
+          ✅ Demo directory successfully deployed!
+          Source: {{ source_dir }}
+          Destination: {{ dest_path }}
+          Total files: {{ files_found.files | length }}
+          Total directories: {{ dirs_found.files | length }}
+          Permissions: Files ({{ read_only_mode }}), Directories ({{ dir_read_only_mode }})
+          Backup created: {{ 'Yes' if backup_existing else 'No' }}

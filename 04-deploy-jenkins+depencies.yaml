@@ -1,0 +1,199 @@
+---
+- name: Deploy Jenkins and dependencies on Ubuntu servers
+  hosts: all
+  become: yes
+  vars:
+    # Jenkins configuration
+    jenkins_version: "2.440"
+    jenkins_port: 8080
+    jenkins_java_options: "-Xmx2g -Djava.awt.headless=true"
+    
+    # User and group configuration
+    jenkins_user: "jenkins"
+    jenkins_group: "jenkins"
+    jenkins_home: "/var/lib/jenkins"
+    
+    # System requirements
+    java_version: "11"
+    jenkins_http_port: "8080"
+    
+  tasks:
+    - name: Update apt package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required dependencies
+      apt:
+        name:
+          - curl
+          - wget
+          - gnupg
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+          - git
+          - unzip
+        state: present
+
+    - name: Install Java
+      apt:
+        name: "openjdk-{{ java_version }}-jdk"
+        state: present
+
+    - name: Add Jenkins repository key
+      apt_key:
+        url: "https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key"
+        state: present
+
+    - name: Add Jenkins repository
+      apt_repository:
+        repo: "deb https://pkg.jenkins.io/debian-stable binary/"
+        state: present
+        filename: jenkins
+
+    - name: Update package cache after adding Jenkins repo
+      apt:
+        update_cache: yes
+
+    - name: Install Jenkins
+      apt:
+        name: "jenkins={{ jenkins_version }}"
+        state: present
+        force: yes
+      notify: restart jenkins
+
+    - name: Ensure Jenkins user has proper home directory permissions
+      file:
+        path: "{{ jenkins_home }}"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_group }}"
+        mode: '0755'
+        state: directory
+
+    - name: Configure Jenkins Java options
+      lineinfile:
+        path: /etc/default/jenkins
+        regexp: '^JAVA_OPTS='
+        line: 'JAVA_OPTS="{{ jenkins_java_options }}"'
+        backrefs: yes
+      notify: restart jenkins
+
+    - name: Configure Jenkins HTTP port
+      lineinfile:
+        path: /etc/default/jenkins
+        regexp: '^HTTP_PORT='
+        line: 'HTTP_PORT={{ jenkins_http_port }}'
+        backrefs: yes
+      notify: restart jenkins
+
+    - name: Ensure Jenkins service is enabled and started
+      systemd:
+        name: jenkins
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Wait for Jenkins to start up
+      uri:
+        url: "http://localhost:{{ jenkins_port }}"
+        status_code: 200
+        timeout: 30
+      register: jenkins_status
+      until: jenkins_status.status == 200
+      retries: 12
+      delay: 10
+      ignore_errors: yes
+
+    - name: Get initial admin password
+      shell: "cat {{ jenkins_home }}/secrets/initialAdminPassword"
+      register: jenkins_initial_password
+      changed_when: false
+
+    - name: Display initial admin password
+      debug:
+        msg: "Jenkins initial admin password: {{ jenkins_initial_password.stdout }}"
+
+    - name: Install recommended plugins (optional - via CLI)
+      shell: |
+        # This would require Jenkins CLI and might need adjustment based on your setup
+        java -jar /usr/share/java/jenkins-cli.jar -s http://localhost:{{ jenkins_port }} install-plugin git workflow-aggregator pipeline-github-lib -deploy
+      when: false  # Set to true if you want to automate plugin installation
+
+    - name: Configure firewall (if ufw is active)
+      ufw:
+        rule: allow
+        port: "{{ jenkins_port }}"
+        proto: tcp
+      when: ansible_os_family == "Debian"
+
+    - name: Install additional useful tools
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+          - python3-pip
+          - maven
+          - gradle
+        state: present
+      ignore_errors: yes
+
+    - name: Add Jenkins user to docker group (if docker installed)
+      user:
+        name: "{{ jenkins_user }}"
+        groups: docker
+        append: yes
+      when: "'docker' in ansible_facts.packages"
+
+    - name: Create Jenkins custom configuration directory
+      file:
+        path: "{{ jenkins_home }}/init.groovy.d"
+        state: directory
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_group }}"
+        mode: '0755'
+
+    - name: Set basic security configuration (example)
+      copy:
+        content: |
+          import jenkins.model.*
+          import hudson.security.*
+          
+          def instance = Jenkins.getInstance()
+          
+          // Skip setup wizard if desired
+          instance.setInstallState(InstallState.INITIAL_SETUP_COMPLETED)
+          
+          println "--> Basic security configuration applied"
+        dest: "{{ jenkins_home }}/init.groovy.d/01-basic-security.groovy"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_group }}"
+        mode: '0644'
+
+    - name: Verify Jenkins installation
+      uri:
+        url: "http://localhost:{{ jenkins_port }}/api/json"
+        method: GET
+        status_code: 200
+        return_content: yes
+      register: jenkins_api_check
+      until: jenkins_api_check.status == 200
+      retries: 5
+      delay: 5
+
+    - name: Display installation summary
+      debug:
+        msg: |
+          Jenkins successfully installed!
+          Version: {{ jenkins_version }}
+          URL: http://{{ ansible_hostname }}:{{ jenkins_port }}
+          Initial Admin Password: {{ jenkins_initial_password.stdout }}
+          Java Version: {{ java_version }}
+          Jenkins Home: {{ jenkins_home }}
+
+  handlers:
+    - name: restart jenkins
+      systemd:
+        name: jenkins
+        state: restarted
+        daemon_reload: yes

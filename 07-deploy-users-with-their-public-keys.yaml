@@ -1,0 +1,55 @@
+---
+- name: Create user and deploy SSH public key
+  hosts: all
+  become: yes
+  vars:
+    username: "john"
+    user_uid: 1020
+    user_shell: "/bin/bash"
+    # Path to local public key file (relative to playbook or absolute path)
+    public_key_file: "~/.ssh/id_ed25519.pub"
+
+  tasks:
+    - name: Create user group
+      group:
+        name: "{{ username }}"
+        state: present
+
+    - name: Create user account
+      user:
+        name: "{{ username }}"
+        group: "{{ username }}"
+        uid: "{{ user_uid }}"
+        shell: "{{ user_shell }}"
+        home: "/home/{{ username }}"
+        create_home: yes
+        state: present
+
+    - name: Create .ssh directory
+      file:
+        path: "/home/{{ username }}/.ssh"
+        state: directory
+        owner: "{{ username }}"
+        group: "{{ username }}"
+        mode: '0700'
+
+    # - name: Read local public key file
+    #   slurp:
+    #     src: "{{ public_key_file | expanduser }}"
+    #   register: public_key_content
+    #   delegate_to: localhost
+    #   run_once: true
+
+    - name: Deploy public key to authorized_keys
+      copy:
+        content: "{{ public_key_content.content | b64decode }}"
+        dest: "/home/{{ username }}/.ssh/authorized_keys"
+        owner: "{{ username }}"
+        group: "{{ username }}"
+        mode: '0600'
+    - name: Ensure admin user has sudo privileges
+      copy:
+        content: "{{ username}} ALL=(ALL) NOPASSWD:ALL"
+        dest: "/etc/sudoers.d/{{ username}}"
+        mode: '0440'
+        validate: 'visudo -cf %s'

@@ -1,0 +1,19 @@
+---
+- name: Basic ping test to all servers
+  hosts: all
+  gather_facts: no
+
+  tasks:
+    - name: Test connection with ping module
+      ansible.builtin.ping:
+      register: ping_result
+
+    - name: Display ping results
+      debug:
+        msg: "✅ {{ inventory_hostname }} - SUCCESS"
+      when: ping_result is succeeded
+
+    - name: Display failed hosts
+      debug:
+        msg: "❌ {{ inventory_hostname }} - FAILED"
+      when: ping_result is failed

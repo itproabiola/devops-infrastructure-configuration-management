@@ -1,0 +1,145 @@
+---
+- name: Deploy sample application to Apache servers
+  hosts: apache_servers
+  become: yes
+  vars:
+    # Application configuration
+    app_name: "my-sample-app"
+    app_version: "1.0.0"
+    web_root: "/var/www/html/{{ app_name }}"
+    
+    # Apache configuration
+    apache_port: 80
+    server_name: "{{ ansible_hostname }}.local"
+    document_root: "{{ web_root }}"
+    
+    # Sample application content
+    app_title: "My Sample Application"
+    app_description: "Welcome to our amazing sample application!"
+    app_background_color: "#f0f8ff"
+    app_primary_color: "#4CAF50"
+
+  tasks:
+    - name: Update apt package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install Apache
+      apt:
+        name: apache2
+        state: present
+
+    - name: Ensure Apache is enabled and started
+      systemd:
+        name: apache2
+        state: started
+        enabled: yes
+
+    - name: Create application directory
+      file:
+        path: "{{ web_root }}"
+        state: directory
+        mode: '0755'
+        owner: "www-data"
+        group: "www-data"
+
+    - name: Deploy sample index.html
+      template:
+        src: templates/index.html.j2
+        dest: "{{ web_root }}/index.html"
+        mode: '0644'
+        owner: "www-data"
+        group: "www-data"
+      notify: restart apache
+
+    - name: Deploy CSS stylesheet
+      template:
+        src: templates/style.css.j2
+        dest: "{{ web_root }}/style.css"
+        mode: '0644'
+        owner: "www-data"
+        group: "www-data"
+      notify: restart apache
+
+    - name: Deploy sample about page
+      template:
+        src: templates/about.html.j2
+        dest: "{{ web_root }}/about.html"
+        mode: '0644'
+        owner: "www-data"
+        group: "www-data"
+      notify: restart apache
+
+    - name: Configure Apache virtual host
+      template:
+        src: templates/sample-app.conf.j2
+        dest: "/etc/apache2/sites-available/{{ app_name }}.conf"
+        mode: '0644'
+        owner: root
+        group: root
+      notify: restart apache
+
+    - name: Enable the new site
+      command: a2ensite {{ app_name }}.conf
+      args:
+        creates: "/etc/apache2/sites-enabled/{{ app_name }}.conf"
+      notify: restart apache
+
+    - name: Disable default Apache site
+      command: a2dissite 000-default.conf
+      args:
+        removes: "/etc/apache2/sites-enabled/000-default.conf"
+      ignore_errors: yes
+      notify: restart apache
+
+    - name: Enable Apache modules
+      apache2_module:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - rewrite
+        - headers
+      notify: restart apache
+
+    - name: Configure firewall for Apache
+      ufw:
+        rule: allow
+        port: "{{ apache_port }}"
+        proto: tcp
+      when: ansible_os_family == "Debian"
+
+    - name: Set proper permissions on web root
+      file:
+        path: "{{ web_root }}"
+        owner: "www-data"
+        group: "www-data"
+        recurse: yes
+        mode: '0755'
+
+    - name: Verify application deployment
+      uri:
+        url: "http://localhost/"
+        method: GET
+        status_code: 200
+        return_content: yes
+      register: app_check
+      until: app_check.status == 200
+      retries: 5
+      delay: 2
+
+    - name: Display deployment information
+      debug:
+        msg: |
+          Sample application successfully deployed!
+          Application Name: {{ app_name }}
+          Version: {{ app_version }}
+          Access URL: http://{{ ansible_host }}
+          Document Root: {{ web_root }}
+          Server Name: {{ server_name }}
+
+  handlers:
+    - name: restart apache
+      systemd:
+        name: apache2
+        state: restarted

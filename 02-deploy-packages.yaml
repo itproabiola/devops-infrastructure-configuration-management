@@ -1,0 +1,115 @@
+---
+- name: Install AWS CLI, kubectl, and eksctl on Ubuntu servers
+  hosts: all
+  become: yes
+  vars:
+    # Version configurations
+    aws_cli_version: "2.15.0"
+    kubectl_version: "1.28.0"
+    eksctl_version: "0.167.0"
+    
+    # Installation paths
+    install_dir: "/usr/local/bin"
+    aws_install_dir: "/opt/aws-cli"
+    
+  tasks:
+    # - name: Update apt package cache
+    #   apt:
+    #     update_cache: yes
+    #     cache_valid_time: 3600
+
+    - name: Install required system dependencies
+      apt:
+        name:
+          - curl
+          - gnupg
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+          - unzip
+        state: present
+
+    - name: Install AWS CLI v2
+      block:
+        - name: Download AWS CLI v2
+          get_url:
+            url: "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-{{ aws_cli_version }}.zip"
+            dest: "/tmp/awscliv2.zip"
+            mode: '0644'
+
+        - name: Unzip AWS CLI
+          unarchive:
+            src: "/tmp/awscliv2.zip"
+            dest: "/tmp"
+            remote_src: yes
+            creates: "/tmp/aws/install"
+
+        - name: Install AWS CLI
+          command: "/tmp/aws/install --update -i {{ aws_install_dir }} --bin-dir {{ install_dir }}"
+          args:
+            creates: "{{ install_dir }}/aws"
+
+        - name: Clean up AWS CLI installation files
+          file:
+            path: "/tmp/awscliv2.zip"
+            state: absent
+
+        - name: Clean up AWS CLI extracted directory
+          file:
+            path: "/tmp/aws"
+            state: absent
+
+    - name: Install kubectl
+      block:
+        - name: Download kubectl binary
+          get_url:
+            url: "https://dl.k8s.io/release/v{{ kubectl_version }}/bin/linux/amd64/kubectl"
+            dest: "{{ install_dir }}/kubectl"
+            mode: '0755'
+            force: yes
+
+        - name: Verify kubectl installation
+          command: "kubectl version --client --output=yaml"
+          register: kubectl_version_check
+          changed_when: false
+
+    - name: Install eksctl
+      block:
+        - name: Download and install eksctl
+          shell: |
+            curl -sSL "https://github.com/eksctl-io/eksctl/releases/download/v{{ eksctl_version }}/eksctl_Linux_amd64.tar.gz" | \
+            tar xz -C /tmp && \
+            sudo mv /tmp/eksctl {{ install_dir }}/eksctl
+          args:
+            creates: "{{ install_dir }}/eksctl"
+
+        - name: Set executable permissions for eksctl
+          file:
+            path: "{{ install_dir }}/eksctl"
+            mode: '0755'
+            owner: root
+            group: root
+
+    - name: Verify all installations
+      block:
+        - name: Check AWS CLI version
+          command: "aws --version"
+          register: aws_version
+          changed_when: false
+
+        - name: Check kubectl version
+          command: "kubectl version --client --short"
+          register: kubectl_version
+          changed_when: false
+
+        - name: Check eksctl version
+          command: "eksctl version"
+          register: eksctl_version
+          changed_when: false
+
+        - name: Display installation results
+          debug:
+            msg:
+              - "AWS CLI: {{ aws_version.stdout }}"
+              - "kubectl: {{ kubectl_version.stdout }}"
+              - "eksctl: {{ eksctl_version.stdout }}"

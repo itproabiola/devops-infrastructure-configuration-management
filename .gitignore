@@ -1,0 +1,24 @@
+# SSH private keys
+*.pem
+*.key
+keys/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+
+# Ansible
+*.retry
+
+# Local environment
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
